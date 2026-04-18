@@ -1,0 +1,1342 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Gestão de Transparência Pública e LAI</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            govBlue: '#0b3a75',
+            govLight: '#e9f1ff',
+            govGray: '#f3f6fb'
+          },
+          boxShadow: {
+            soft: '0 10px 35px rgba(11, 58, 117, 0.12)'
+          }
+        }
+      }
+    };
+  </script>
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body class="bg-slate-50 text-slate-800">
+  <div id="app" class="min-h-screen flex">
+    <header class="lg:hidden fixed top-0 inset-x-0 z-40 bg-slate-950 text-white px-4 py-3 flex items-center justify-between shadow-soft">
+      <h1 class="font-semibold">Transparência Ariquemes</h1>
+      <button class="chip" @click="mobileMenuOpen = true">☰</button>
+    </header>
+
+    <div v-if="mobileMenuOpen" class="lg:hidden fixed inset-0 z-50 bg-black/40" @click="mobileMenuOpen = false"></div>
+    <aside class="w-80 bg-slate-950 text-white p-6 shadow-soft fixed lg:static inset-y-0 left-0 z-50 transform transition-transform duration-300 lg:translate-x-0" :class="mobileMenuOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'">
+      <h1 class="text-xl font-bold">Transparência Ariquemes</h1>
+      <p class="text-xs text-blue-100 mt-1">Painel integrado LAI, IN 32, PNTP, Decreto e Sigilo</p>
+      <nav class="mt-6 space-y-2 max-h-[63vh] overflow-auto pr-1">
+        <template v-for="tab in tabs" :key="tab.id">
+          <button v-if="!['sigilo','auditoria'].includes(tab.id) || userPermissions.canAccessRestrictedModules" @click="activeTab = tab.id" class="w-full text-left px-4 py-3 rounded-xl transition" :class="activeTab===tab.id ? 'bg-white text-govBlue font-semibold' : 'bg-blue-900/30 hover:bg-blue-900/50'">{{ tab.label }}</button>
+        </template>
+      </nav>
+      <div class="mt-6 p-4 rounded-xl bg-blue-900/40 text-sm">
+        <p class="font-semibold">Conformidade Geral</p>
+        <p class="text-3xl font-bold">{{ overallCompliance }}%</p>
+        <p class="text-xs mt-2 text-blue-100">Última atualização: {{ nowStamp }}</p>
+      </div>
+    </aside>
+
+    <main class="flex-1 p-4 pt-20 lg:pt-10 lg:p-10 overflow-y-auto space-y-6 transition-all duration-300">
+      <div v-if="isLoading" class="fixed inset-0 z-50 flex items-center justify-center bg-white/50 backdrop-blur-sm">
+        <div class="w-10 h-10 border-4 border-govBlue border-t-transparent rounded-full animate-spin"></div>
+      </div>
+      <section class="panel" v-if="isAuthenticated">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p class="text-sm text-slate-500">Usuário logado</p>
+            <p class="font-semibold">{{ currentUser.nome }} • {{ currentUser.role }} <span v-if="currentUser.secretaria">({{ currentUser.secretaria }})</span></p>
+          </div>
+          <div class="flex gap-2">
+            <button v-if="!isAdmin" class="chip amber" @click="activeTab='pendencias'">Minhas pendências</button>
+            <button class="chip rose" @click="logout">Sair</button>
+          </div>
+        </div>
+      </section>
+
+      <section v-else class="panel max-w-xl mx-auto">
+        <h2 class="title">Acesso ao Sistema</h2>
+                <div class="space-y-3">
+          <input v-model="loginForm.email" type="email" class="input" />
+          <input v-model="loginForm.password" type="password" class="input" />
+          <button @click="login" class="btn">Entrar</button>
+          <p v-if="authError" class="text-sm text-rose-600">{{ authError }}</p>
+        </div>
+      </section>
+      <section v-if="isAuthenticated && activeTab==='dashboard'" class="space-y-6">
+        <div class="flex flex-wrap gap-3 items-center justify-between">
+          <h2 class="text-2xl font-bold text-govBlue">Dashboard Executivo Inteligente</h2>
+          <input v-model="globalSearch" class="input w-80" placeholder="Busca global por protocolo, secretaria, critério..." />
+        </div>
+
+        <div class="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-4">
+          <div class="card"><p class="muted">LAI Abertos</p><p class="kpi">{{ laiOpen }}</p></div>
+          <div class="card"><p class="muted">LAI Respondidos</p><p class="kpi text-emerald-600">{{ laiAnswered }}</p></div>
+          <div class="card"><p class="muted">LAI Atrasados</p><p class="kpi text-rose-600">{{ laiLate }}</p></div>
+          <div class="card"><p class="muted">IN 32 Conforme</p><p class="kpi">{{ in32Compliance }}%</p></div>
+          <div class="card"><p class="muted">PNTP Conforme</p><p class="kpi">{{ pntpCompliance }}%</p></div>
+          <div class="card"><p class="muted">Decreto 23.230</p><p class="kpi">{{ decretoCompliance }}%</p></div>
+          <div class="card"><p class="muted">Tempo Médio LAI</p><p class="kpi">{{ avgLaiResponseDays }} dias</p></div>
+          <div class="card"><p class="muted">Saúde Transparência</p><p class="kpi">{{ transparencyHealth }}%</p></div>
+        </div>
+
+        <div class="grid grid-cols-1 xl:grid-cols-3 gap-6">
+          <div class="panel">
+            <h3 class="font-semibold text-govBlue">Conformidade Integrada</h3>
+            <div class="flex items-center justify-center mt-5">
+              <div class="w-44 h-44 rounded-full" :style="{background: `conic-gradient(#0b3a75 ${overallCompliance}%, #dbe7ff 0)`}">
+                <div class="w-32 h-32 bg-white rounded-full mx-auto mt-6 flex items-center justify-center"><span class="text-2xl font-bold text-govBlue">{{ overallCompliance }}%</span></div>
+              </div>
+            </div>
+            <div class="text-sm mt-4 space-y-1">
+              <p>IN 32/2026: <strong>{{ in32Compliance }}%</strong></p>
+              <p>PNTP 2026: <strong>{{ pntpCompliance }}%</strong></p>
+              <p>Decreto 23.230/2025: <strong>{{ decretoCompliance }}%</strong></p>
+            </div>
+          </div>
+
+          <div class="panel">
+            <h3 class="font-semibold text-govBlue">Situação LAI</h3>
+            <div class="mt-4 space-y-3">
+              <div v-for="bar in laiBarData" :key="bar.label">
+                <div class="flex justify-between text-sm"><span>{{ bar.label }}</span><span>{{ bar.value }}</span></div>
+                <div class="h-4 rounded bg-slate-100 overflow-hidden"><div class="h-full rounded" :class="bar.color" :style="{width: bar.percent + '%'}"></div></div>
+              </div>
+            </div>
+            <div class="text-xs mt-4 text-slate-600">Tempo médio para resposta (pedidos respondidos): <strong>{{ avgResponseDays }} dias</strong></div>
+          </div>
+
+          <div class="panel">
+            <h3 class="font-semibold text-govBlue">Alertas Prioritários</h3>
+            <ul class="mt-4 text-sm space-y-2 max-h-64 overflow-auto">
+              <li v-for="a in smartAlerts" :key="a.id" class="p-2 rounded border" :class="a.level==='alto' ? 'bg-rose-50 border-rose-200' : 'bg-amber-50 border-amber-200'">
+                <p class="font-semibold">{{ a.title }}</p>
+                <p>{{ a.detail }}</p>
+              </li>
+              <li v-if="!smartAlerts.length" class="text-emerald-700">Nenhum alerta crítico no momento.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section v-if="isAuthenticated && activeTab==='pendencias'" class="space-y-6">
+        <h2 class="title">Minhas Pendências</h2>
+        <p class="text-sm text-slate-600">Lista focada nas ações da sua secretaria, sem gráficos.</p>
+        <div class="space-y-3">
+          <div v-for="(p,idx) in minhasPendencias" :key="idx" class="panel"><p class="font-semibold">{{ p.tipo }}</p><p class="text-sm">{{ p.descricao }}</p><button class="chip amber mt-2" @click="activeTab = p.tabTarget">Resolver</button></div>
+          <div v-if="!minhasPendencias.length" class="panel text-emerald-700">Nenhuma pendência para sua secretaria.</div>
+        </div>
+      </section>
+
+      <section v-if="isAuthenticated && activeTab==='lai'" class="space-y-6">
+        <div class="flex items-center justify-between gap-3 flex-wrap">
+          <h2 class="title">Gestão da LAI (Transparência Passiva)</h2>
+          <button v-if="isAdmin" @click="showFormLai = !showFormLai" class="btn">{{ showFormLai ? 'Ocultar formulário' : '+ Novo Pedido' }}</button>
+        </div>
+        <div v-if="showFormLai" class="panel">
+          <h3 class="subtitle">Novo Pedido e-SIC</h3>
+          <div class="grid md:grid-cols-2 gap-4">
+            <input v-model="laiForm.protocolo" placeholder="NUP/Protocolo" class="input" />
+            <input type="date" v-model="laiForm.dataPedido" class="input" />
+            <input v-model="laiForm.requerente" placeholder="Requerente" class="input" />
+            <input type="date" v-model="laiForm.dataResposta" class="input" />
+            <input v-model="laiForm.fundamentoLegal" placeholder="Fundamento legal da resposta/negativa" class="input" />
+            <div class="md:col-span-2 p-3 border rounded-xl bg-slate-50">
+              <p class="text-sm font-semibold mb-2">Secretarias responsáveis</p>
+              <div class="grid md:grid-cols-3 gap-2 text-sm">
+                <label v-for="s in (isAdmin ? secretarias : secretarias.filter(x => x.nome === currentUser.secretaria))" :key="'lai-'+s.id" class="flex items-center gap-2"><input type="checkbox" :value="s.nome" v-model="laiForm.selectedSecretarias"> {{ s.nome }}</label>
+              </div>
+            </div>
+            <textarea v-model="laiForm.descricao" placeholder="Descrição do pedido" class="input md:col-span-2"></textarea>
+          </div>
+          <button v-if="isAdmin" @click="addLaiRequest" class="btn mt-4" :disabled="isUploading">{{ isUploading ? 'Processando...' : 'Adicionar Pedido' }}</button>
+        </div>
+        <div class="panel overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead><tr class="text-left border-b"><th class="py-2">Protocolo</th><th>Pedido</th><th>Prazo</th><th>Requerente</th><th>Data Resposta</th><th>Fundamento</th><th>Secretaria</th><th>Status</th><th>Ações</th></tr></thead>
+            <tbody>
+              <tr v-for="req in filteredLaiRequests" :key="req.id" class="border-b">
+                <td class="py-2">{{ req.protocolo }}</td><td>{{ fmtDate(req.dataPedido) }}</td><td><span :class="deadlineBadgeClass(req)">{{ fmtDate(req.prazoLegal) }}</span></td>
+                <td>{{ req.requerente }}</td><td><input type="date" v-model="req.dataResposta" @change="updateLai(req)" class="input py-1"></td><td><input v-model="req.fundamentoLegal" @change="updateLai(req)" class="input py-1"></td><td>{{ req.secretaria }}</td>
+                <td><select v-model="req.statusManual" @change="updateLai(req)" class="input py-1"><option value="">Automático</option><option>No Prazo</option><option>Atrasado</option><option>Respondido</option></select><p class="text-xs mt-1">Atual: <strong>{{ effectiveStatus(req) }}</strong></p></td>
+                <td class="space-x-2"><button v-if="isAdmin" @click="extendDeadline(req)" class="chip amber">+10 dias</button><button v-if="isAdmin" @click="removeLai(req.id)" class="chip rose">Excluir</button></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section v-if="isAuthenticated && activeTab==='in32'" class="space-y-6">
+        <div class="flex items-center justify-between gap-3 flex-wrap">
+          <h2 class="title">Monitoramento do Portal (IN nº 32/2026)</h2>
+          <div class="flex gap-2">
+            <button v-if="isAdmin" @click="showFormIn32 = !showFormIn32" class="btn">{{ showFormIn32 ? 'Ocultar formulário' : '+ Novo Critério' }}</button>
+            <button v-if="isAdmin" @click="exportarExcelIn32" class="btn">Exportar Excel</button>
+          </div>
+        </div>
+        <div v-if="isAdmin" class="panel">
+          <h3 class="subtitle">Mapa de Conformidade</h3>
+          <div class="space-y-2 text-sm">
+            <div v-for="m in mapaIn32" :key="m.chave" class="p-2 border rounded-lg">
+              <p class="font-semibold">{{ m.criterio }}</p>
+              <div class="flex flex-wrap gap-2 mt-1">
+                <span v-for="s in m.secretarias" :key="s.nome" class="px-2 py-1 rounded text-xs" :class="statusBadgeClass(s.status)">{{ s.nome }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div v-if="showFormIn32" class="panel">
+          <h3 class="subtitle">Cadastrar Critério/Subcritério IN</h3>
+          <div class="grid lg:grid-cols-3 gap-3">
+            <input v-model="in32Form.criterio" placeholder="Critério" class="input" /><input v-model="in32Form.subcriterio" placeholder="Subcritério" class="input" />
+            <select v-model="in32Form.status" class="input"><option>Conforme</option><option>Não Conforme</option><option>Não Aplicável</option></select>
+            <div class="lg:col-span-2 p-3 border rounded-xl bg-slate-50"><p class="text-sm font-semibold mb-2">Secretarias responsáveis</p><div class="grid md:grid-cols-3 gap-2 text-sm"><label v-for="s in secretarias" :key="'in32-'+s.id" class="flex items-center gap-2"><input type="checkbox" :value="s.nome" v-model="in32Form.selectedSecretarias"> {{ s.nome }}</label></div></div>
+            <input v-model="in32Form.localPublicacao" placeholder="Onde alimenta" class="input" /><input type="date" v-model="in32Form.ultimaChecagem" class="input" />
+            <input v-model="in32Form.obs" placeholder="Observação" class="input lg:col-span-2" />
+          </div>
+          <button v-if="isAdmin" @click="addIn32Item" class="btn mt-4" :disabled="isUploading">{{ isUploading ? 'Processando...' : 'Adicionar Critério IN' }}</button>
+        </div>
+        <div class="panel space-y-4">
+          <div v-for="item in filteredIn32" :key="item.id" class="p-4 rounded-xl border bg-slate-50">
+            <div class="grid lg:grid-cols-4 gap-3">
+              <template v-if="isAdmin">
+                <input v-model="item.criterio" @change="updateIn32(item)" class="input" /><input v-model="item.subcriterio" @change="updateIn32(item)" class="input" /><input v-model="item.secretaria" @change="updateIn32(item)" class="input" list="secretarias-list" /><input v-model="item.responsavel" @change="updateIn32(item)" class="input" />
+                <input v-model="item.localPublicacao" @change="updateIn32(item)" class="input lg:col-span-2" /><input type="date" v-model="item.ultimaChecagem" @change="updateIn32(item)" class="input" />
+                <select v-model="item.status" @change="updateIn32(item)" class="input"><option>Conforme</option><option>Não Conforme</option><option>Não Aplicável</option></select><input v-model="item.obs" @change="updateIn32(item)" class="input lg:col-span-3" />
+              </template>
+              <template v-else>
+                <p class="font-semibold">{{ item.criterio }}</p><p class="font-semibold">{{ item.subcriterio }}</p><p class="font-semibold">{{ item.secretaria }}</p><p class="font-semibold">{{ item.responsavel || '-' }}</p>
+                <p class="font-semibold lg:col-span-2">{{ item.localPublicacao || '-' }}</p><p class="font-semibold">{{ fmtDate(item.ultimaChecagem) }}</p>
+                <p class="font-semibold">{{ item.status }}</p><p class="font-semibold lg:col-span-3">{{ item.obs || '-' }}</p>
+              </template>
+            </div>
+            <div v-if="!isAdmin" class="mt-3 flex flex-wrap gap-2 items-center">
+              <input type="file" :disabled="isUploading" @change="uploadEvidencia($event, item, 'in32checklist')" class="input" />
+              <span v-if="isUploading" class="text-xs text-slate-500">Enviando evidência...</span>
+              <a v-if="item.evidencia" :href="item.evidencia" target="_blank" class="chip">Ver Anexo</a>
+            </div>
+            <div class="mt-3 flex items-center justify-between"><span v-if="isIn32ReviewDue(item)" class="text-xs font-semibold text-rose-700">REVISÃO PENDENTE</span><button v-if="isAdmin" @click="removeIn32Item(item.id)" class="chip rose">Excluir</button></div>
+          </div>
+        </div>
+      </section>
+
+      <section v-if="isAuthenticated && activeTab==='pntp'" class="space-y-6">
+        <div class="flex items-center justify-between gap-3 flex-wrap"><h2 class="title">Auditoria PNTP 2026 (Transparência Ativa)</h2><div class="flex gap-2"><button v-if="isAdmin" @click="showFormPntp = !showFormPntp" class="btn">{{ showFormPntp ? 'Ocultar formulário' : '+ Novo Critério' }}</button><button @click="exportPntpPdf" class="btn">Exportar Relatório em PDF</button><button v-if="isAdmin" @click="exportarExcelPntp" class="btn">Exportar Excel</button></div></div>
+        <div v-if="isAdmin" class="panel">
+          <h3 class="subtitle">Mapa de Conformidade</h3>
+          <div class="space-y-2 text-sm">
+            <div v-for="m in mapaPntp" :key="m.chave" class="p-2 border rounded-lg">
+              <p class="font-semibold">{{ m.criterio }}</p>
+              <div class="flex flex-wrap gap-2 mt-1">
+                <span v-for="s in m.secretarias" :key="s.nome" class="px-2 py-1 rounded text-xs" :class="statusBadgeClass(s.status)">{{ s.nome }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div v-if="showFormPntp" class="panel">
+          <h3 class="subtitle">Cadastrar Critério/Subcritério PNTP</h3>
+          <div class="grid lg:grid-cols-3 gap-3">
+            <input v-model="pntpForm.criterio" placeholder="Critério" class="input" />
+            <div class="lg:col-span-2 p-3 border rounded-xl bg-slate-50">
+              <p class="text-sm font-semibold mb-2">Exigências do subcritério</p>
+              <div class="flex flex-wrap gap-4 text-sm">
+                <label class="flex items-center gap-2"><input type="checkbox" v-model="pntpForm.exigeDisponibilidade"> Exige Disponibilidade</label>
+                <label class="flex items-center gap-2"><input type="checkbox" v-model="pntpForm.exigeAtualidade"> Exige Atualidade</label>
+                <label class="flex items-center gap-2"><input type="checkbox" v-model="pntpForm.exigeSerie"> Exige Série Histórica</label>
+              </div>
+            </div>
+            <textarea v-model="pntpForm.instrucoes" placeholder="Instruções gerais para a secretaria" class="input lg:col-span-3"></textarea>
+            <textarea v-if="pntpForm.exigeDisponibilidade" v-model="pntpForm.instrucaoDisponibilidade" placeholder="Instrução de Disponibilidade" class="input lg:col-span-3"></textarea>
+            <textarea v-if="pntpForm.exigeAtualidade" v-model="pntpForm.instrucaoAtualidade" placeholder="Instrução de Atualidade" class="input lg:col-span-3"></textarea>
+            <textarea v-if="pntpForm.exigeSerie" v-model="pntpForm.instrucaoSerie" placeholder="Instrução de Série Histórica" class="input lg:col-span-3"></textarea>
+            <div class="lg:col-span-3 p-3 border rounded-xl bg-slate-50"><p class="text-sm font-semibold mb-2">Secretarias responsáveis</p><div class="grid md:grid-cols-3 gap-2 text-sm"><label v-for="s in secretarias" :key="'pntp-'+s.id" class="flex items-center gap-2"><input type="checkbox" :value="s.nome" v-model="pntpForm.selectedSecretarias"> {{ s.nome }}</label></div></div>
+            <input v-model="pntpForm.localPublicacao" placeholder="Onde alimenta" class="input lg:col-span-3" />
+          </div>
+          <button v-if="isAdmin" @click="addPntpItem" class="btn mt-4" :disabled="isUploading">{{ isUploading ? 'Processando...' : 'Adicionar Critério PNTP' }}</button>
+        </div>
+        <div id="pntp-report" class="panel space-y-4">
+          <p class="text-sm text-slate-600">Matriz PNTP: Disponibilidade, Atualidade e Série Histórica.</p>
+          <div v-for="item in filteredPntp" :key="item.id" class="border rounded-xl p-4 bg-slate-50">
+            <div class="grid lg:grid-cols-2 gap-3">
+              <template v-if="isAdmin">
+                <input v-model="item.criterio" @change="updatePntp(item)" class="input" />
+                <input v-model="item.secretaria" class="input" readonly />
+                <input v-model="item.responsavel" class="input" readonly />
+                <input v-model="item.localPublicacao" @change="updatePntp(item)" class="input" />
+                <textarea v-model="item.instrucoes" @change="updatePntp(item)" class="input lg:col-span-2"></textarea>
+              </template>
+              <template v-else>
+                <p class="font-semibold">{{ item.criterio }}</p>
+                <p class="font-semibold">{{ item.secretaria }}</p>
+                <p class="font-semibold">{{ item.responsavel || '-' }}</p>
+                <p class="font-semibold">{{ item.localPublicacao || '-' }}</p>
+                <p class="font-semibold lg:col-span-2">{{ item.instrucoes || '-' }}</p>
+              </template>
+            </div>
+            <div class="grid md:grid-cols-3 gap-3 mt-3 text-sm">
+              <div v-if="item.exigeDisponibilidade" class="space-y-1"><p class="text-xs text-slate-600">{{ item.instrucaoDisponibilidade }}</p><label class="flex items-center gap-2"><input type="checkbox" v-model="item.disponibilidade" :disabled="isAdmin" @change="updatePntp(item)"> Disponibilidade</label></div>
+              <div v-if="item.exigeAtualidade" class="space-y-1"><p class="text-xs text-slate-600">{{ item.instrucaoAtualidade }}</p><label class="flex items-center gap-2"><input type="checkbox" v-model="item.atualidade" :disabled="isAdmin" @change="updatePntp(item)"> Atualidade</label></div>
+              <div v-if="item.exigeSerie" class="space-y-1"><p class="text-xs text-slate-600">{{ item.instrucaoSerie }}</p><label class="flex items-center gap-2"><input type="checkbox" v-model="item.serieHistorica" :disabled="isAdmin" @change="updatePntp(item)"> Série Histórica</label></div>
+            </div>
+            <input v-model="item.justificativa" @change="updatePntp(item)" :readonly="isAdmin" class="input mt-3" placeholder="Justificativa (obrigatória se não atender exigências)" />
+            <div v-if="!isAdmin" class="mt-3 flex flex-wrap gap-2 items-center">
+              <input type="file" :disabled="isUploading" @change="uploadEvidencia($event, item, 'pntpchecklist')" class="input" />
+              <span v-if="isUploading" class="text-xs text-slate-500">Enviando evidência...</span>
+              <a v-if="item.evidencia" :href="item.evidencia" target="_blank" class="chip">Ver Anexo</a>
+            </div>
+            <div class="mt-3 text-right"><button v-if="isAdmin" @click="removePntpItem(item.id)" class="chip rose">Excluir</button></div>
+          </div>
+        </div>
+      </section>
+
+      <section v-if="isAuthenticated && activeTab==='decreto'" class="space-y-6">
+        <div class="flex items-center justify-between gap-3 flex-wrap">
+          <h2 class="title">Implementação do Decreto LAI nº 23.230/2025</h2>
+          <div class="flex gap-2">
+            <button v-if="isAdmin" @click="showFormDecreto = !showFormDecreto" class="btn">{{ showFormDecreto ? 'Ocultar formulário' : '+ Nova Obrigação' }}</button>
+            <button v-if="isAdmin" @click="exportarExcelDecreto" class="btn">Exportar Excel</button>
+          </div>
+        </div>
+        <div v-if="isAdmin" class="panel">
+          <h3 class="subtitle">Mapa de Conformidade</h3>
+          <div class="space-y-2 text-sm">
+            <div v-for="m in mapaDecreto" :key="m.chave" class="p-2 border rounded-lg">
+              <p class="font-semibold">{{ m.criterio }}</p>
+              <div class="flex flex-wrap gap-2 mt-1">
+                <span v-for="s in m.secretarias" :key="s.nome" class="px-2 py-1 rounded text-xs" :class="statusBadgeClass(s.status)">{{ s.nome }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="panel bg-blue-50 border border-blue-100 text-sm">
+          <p><strong>Pesquisa:</strong> o decreto específico não foi encontrado de forma direta nas buscas indexadas. O módulo permanece totalmente parametrizável para cadastro de todos os artigos, obrigações e evidências oficiais.</p>
+        </div>
+        <div v-if="showFormDecreto" class="panel">
+          <h3 class="subtitle">Nova obrigação</h3>
+          <div class="grid lg:grid-cols-3 gap-3">
+            <input v-model="decretoForm.obrigacao" class="input" placeholder="Obrigação" /><input v-model="decretoForm.subitem" class="input" placeholder="Subitem" /><input v-model="decretoForm.baseLegal" class="input" placeholder="Base legal" />
+            <input v-model="decretoForm.localImplementacao" class="input" placeholder="Onde implementar" /><div class="lg:col-span-2 p-3 border rounded-xl bg-slate-50"><p class="text-sm font-semibold mb-2">Secretarias responsáveis</p><div class="grid md:grid-cols-3 gap-2 text-sm"><label v-for="s in secretarias" :key="'dec-'+s.id" class="flex items-center gap-2"><input type="checkbox" :value="s.nome" v-model="decretoForm.selectedSecretarias"> {{ s.nome }}</label></div></div>
+            <input type="date" v-model="decretoForm.prazo" class="input" /><select v-model="decretoForm.prioridade" class="input"><option>Alta</option><option>Média</option><option>Baixa</option></select><select v-model="decretoForm.status" class="input"><option>Pendente</option><option>Em Execução</option><option>Concluída</option><option>Bloqueada</option></select>
+            <input v-model="decretoForm.evidencia" class="input lg:col-span-2" placeholder="Evidência" /><input v-model="decretoForm.obs" class="input" placeholder="Observações" />
+          </div>
+          <button v-if="isAdmin" @click="addDecretoTask" class="btn mt-4" :disabled="isUploading">{{ isUploading ? 'Processando...' : 'Adicionar obrigação' }}</button>
+        </div>
+        <div class="panel space-y-3">
+          <div v-for="item in filteredDecreto" :key="item.id" class="p-4 rounded-xl border bg-slate-50">
+            <div class="grid lg:grid-cols-4 gap-3">
+              <template v-if="isAdmin">
+                <input v-model="item.obrigacao" @change="updateDecreto(item)" class="input" /><input v-model="item.subitem" @change="updateDecreto(item)" class="input" /><input v-model="item.baseLegal" @change="updateDecreto(item)" class="input" /><input v-model="item.localImplementacao" @change="updateDecreto(item)" class="input" />
+                <input v-model="item.secretaria" @change="updateDecreto(item)" class="input" /><input v-model="item.responsavel" @change="updateDecreto(item)" class="input" /><input type="date" v-model="item.prazo" @change="updateDecreto(item)" class="input" /><select v-model="item.prioridade" @change="updateDecreto(item)" class="input"><option>Alta</option><option>Média</option><option>Baixa</option></select>
+                <select v-model="item.status" @change="updateDecreto(item)" class="input"><option>Pendente</option><option>Em Execução</option><option>Concluída</option><option>Bloqueada</option></select><input v-model="item.evidencia" @change="updateDecreto(item)" class="input lg:col-span-2" /><input v-model="item.obs" @change="updateDecreto(item)" class="input" />
+              </template>
+              <template v-else>
+                <p class="font-semibold">{{ item.obrigacao }}</p><p class="font-semibold">{{ item.subitem || '-' }}</p><p class="font-semibold">{{ item.baseLegal || '-' }}</p><p class="font-semibold">{{ item.localImplementacao || '-' }}</p>
+                <p class="font-semibold">{{ item.secretaria }}</p><p class="font-semibold">{{ item.responsavel || '-' }}</p><p class="font-semibold">{{ fmtDate(item.prazo) }}</p><p class="font-semibold">{{ item.prioridade }}</p>
+                <select v-model="item.status" @change="updateDecreto(item)" class="input"><option>Pendente</option><option>Em Execução</option><option>Concluída</option><option>Bloqueada</option></select><p class="font-semibold lg:col-span-2">{{ item.evidencia || '-' }}</p><p class="font-semibold">{{ item.obs || '-' }}</p>
+              </template>
+            </div>
+            <div v-if="!isAdmin" class="mt-3 flex flex-wrap gap-2 items-center">
+              <input type="file" :disabled="isUploading" @change="uploadEvidencia($event, item, 'decretotasks')" class="input" />
+              <span v-if="isUploading" class="text-xs text-slate-500">Enviando evidência...</span>
+              <a v-if="item.evidencia" :href="item.evidencia" target="_blank" class="chip">Ver Anexo</a>
+            </div>
+            <div class="mt-3 flex justify-between items-center text-xs"><span :class="decretoPrazoClass(item)">{{ decretoPrazoTexto(item) }}</span><button v-if="isAdmin" @click="removeDecretoTask(item.id)" class="chip rose">Excluir</button></div>
+          </div>
+        </div>
+      </section>
+
+      <section v-if="isAuthenticated && userPermissions.canViewSigilo && activeTab==='sigilo'" class="space-y-6">
+        <div class="flex items-center justify-between gap-3 flex-wrap">
+          <h2 class="title">Documentos Classificados e Desclassificados</h2>
+          <button v-if="isAdmin" @click="showFormSigilo = !showFormSigilo" class="btn">{{ showFormSigilo ? 'Ocultar formulário' : '+ Novo Documento' }}</button>
+        </div>
+        <div class="panel bg-indigo-50 border border-indigo-100 text-sm">
+          <p>Referência legal recomendada: Lei 12.527/2011 (art. 24), com graus reservado/secreto/ultrassecreto e respectivos prazos máximos.</p>
+        </div>
+        <div v-if="showFormSigilo" class="panel">
+          <h3 class="subtitle">Cadastrar documento</h3>
+          <div class="grid lg:grid-cols-3 gap-3">
+            <input v-model="sigiloForm.titulo" class="input" placeholder="Título" /><input v-model="sigiloForm.numeroDocumento" class="input" placeholder="Número/NUP" /><select v-model="sigiloForm.grauSigilo" class="input"><option>Reservado</option><option>Secreto</option><option>Ultrassecreto</option></select>
+            <input v-model="sigiloForm.baseLegal" class="input" placeholder="Base legal" /><input v-model="sigiloForm.autoridadeClassificadora" class="input" placeholder="Autoridade classificadora" /><input type="date" v-model="sigiloForm.dataClassificacao" class="input" />
+            <input type="date" v-model="sigiloForm.prazoReavaliacao" class="input" /><select v-model="sigiloForm.statusSigilo" class="input"><option>Classificado</option><option>Desclassificado</option><option>Reclassificado</option></select><input type="date" v-model="sigiloForm.dataDesclassificacao" class="input" />
+            <input v-model="sigiloForm.motivoDesclassificacao" class="input" placeholder="Motivo desclassificação" /><input v-model="sigiloForm.autoridadeDesclassificou" class="input" placeholder="Quem desclassificou" /><input v-model="sigiloForm.localArquivo" class="input" placeholder="Local arquivo/publicação" />
+            <input v-model="sigiloForm.obs" class="input lg:col-span-3" placeholder="Observações" />
+          </div>
+          <button v-if="isAdmin" @click="addSigiloDoc" class="btn mt-4" :disabled="isUploading">{{ isUploading ? 'Processando...' : 'Adicionar documento' }}</button>
+        </div>
+        <div class="panel space-y-4">
+          <div v-for="doc in filteredSigilo" :key="doc.id" class="p-4 rounded-xl border bg-slate-50">
+            <div v-if="isSigiloUrgente(doc)" class="chip rose mb-2">URGENTE</div>
+            <div class="grid lg:grid-cols-4 gap-3">
+              <input v-model="doc.titulo" @change="updateSigilo(doc)" class="input" /><input v-model="doc.numeroDocumento" @change="updateSigilo(doc)" class="input" /><select v-model="doc.grauSigilo" @change="updateSigilo(doc)" class="input"><option>Reservado</option><option>Secreto</option><option>Ultrassecreto</option></select><select v-model="doc.statusSigilo" @change="updateSigilo(doc)" class="input"><option>Classificado</option><option>Desclassificado</option><option>Reclassificado</option></select>
+              <input v-model="doc.baseLegal" @change="updateSigilo(doc)" class="input" /><input v-model="doc.autoridadeClassificadora" @change="updateSigilo(doc)" class="input" /><input type="date" v-model="doc.dataClassificacao" @change="updateSigilo(doc)" class="input" /><input type="date" v-model="doc.prazoReavaliacao" @change="updateSigilo(doc)" class="input" />
+              <input type="date" v-model="doc.dataDesclassificacao" @change="updateSigilo(doc)" class="input" /><input v-model="doc.motivoDesclassificacao" @change="updateSigilo(doc)" class="input" /><input v-model="doc.autoridadeDesclassificou" @change="updateSigilo(doc)" class="input" /><input v-model="doc.localArquivo" @change="updateSigilo(doc)" class="input" />
+              <input v-model="doc.obs" @change="updateSigilo(doc)" class="input lg:col-span-4" />
+            </div>
+            <div class="mt-3 grid lg:grid-cols-6 gap-2 items-center"><input v-model="doc.novoEvento" class="input lg:col-span-4" placeholder="Adicionar histórico" /><input type="date" v-model="doc.dataNovoEvento" class="input" /><button v-if="isAdmin" @click="addSigiloHistorico(doc)" class="btn">Adicionar</button></div>
+            <ul class="mt-3 text-xs space-y-1 bg-white p-3 rounded border"><li v-for="(h,idx) in doc.historico" :key="idx">• {{ fmtDate(h.data) }} — {{ h.texto }}</li><li v-if="!doc.historico.length" class="text-slate-500">Sem histórico.</li></ul>
+            <div class="mt-3 text-right"><button v-if="isAdmin" @click="removeSigiloDoc(doc.id)" class="chip rose">Excluir documento</button></div>
+          </div>
+        </div>
+      </section>
+
+      <section v-if="isAuthenticated && activeTab==='config'" class="space-y-6">
+        <h2 class="title">Configurações, Segurança e Backups</h2>
+        <div class="panel space-y-4">
+          <h3 class="subtitle">Trocar minha senha</h3>
+          <div class="grid md:grid-cols-3 gap-3">
+            <input type="password" v-model="pwdForm.current" class="input" placeholder="Senha atual" />
+            <input type="password" v-model="pwdForm.newPass" class="input" placeholder="Nova senha" />
+            <input type="password" v-model="pwdForm.confirm" class="input" placeholder="Confirmar nova senha" />
+          </div>
+          <button class="btn" @click="changeMyPassword" :disabled="isUploading">{{ isUploading ? 'Processando...' : 'Atualizar senha' }}</button>
+        </div>
+
+        <div class="panel space-y-4" v-if="userPermissions.canManageUsers">
+          <h3 class="subtitle">Cadastramento & Credenciamento de Usuários</h3>
+          <button @click="showFormUser = !showFormUser" class="btn w-fit">{{ showFormUser ? 'Ocultar formulário' : '+ Novo Usuário' }}</button>
+          <div v-if="showFormUser" class="grid md:grid-cols-4 gap-3">
+            <input v-model="userForm.nome" class="input" placeholder="Nome" />
+            <input v-model="userForm.username" class="input" />
+            <input v-model="userForm.password" type="password" class="input" />
+            <select v-model="userForm.role" class="input"><option>ADMIN</option><option>SECRETARIA</option></select>
+            <select v-model="userForm.secretaria" class="input md:col-span-2"><option value="">Selecione a secretaria</option><option v-for="s in secretarias" :key="'user-sec-'+s.id" :value="s.nome">{{ s.nome }}</option></select>
+            <button @click="submitUserForm" class="btn" :disabled="isUploading">{{ isUploading ? 'Processando...' : (editingUserId ? 'Salvar Alterações' : 'Criar usuário') }}</button>
+          </div>
+          <button v-if="editingUserId" @click="cancelEditUser" class="chip mt-2">Cancelar edição</button>
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead><tr class="text-left border-b"><th class="py-2">Nome</th><th>Usuário</th><th>Perfil</th><th>Secretaria</th><th></th></tr></thead>
+              <tbody>
+                <tr v-for="u in users" :key="u.id" class="border-b">
+                  <td class="py-2">{{ u.nome }}</td><td>{{ u.username }}</td><td>{{ u.role }}</td><td>{{ u.secretaria || '-' }}</td>
+                  <td class="space-x-2"><button class="chip" @click="editUser(u)">Editar</button><button class="chip rose" @click="removeUser(u.id)" >Excluir</button></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="panel space-y-4">
+          <h3 class="subtitle">Cadastro de Secretarias</h3>
+          <button v-if="isAdmin" @click="showFormSecretaria = !showFormSecretaria" class="btn w-fit">{{ showFormSecretaria ? 'Ocultar formulário' : '+ Nova Secretaria' }}</button>
+          <div v-if="showFormSecretaria" class="grid md:grid-cols-3 gap-3"><input v-model="secretariaForm.nome" class="input" placeholder="Secretaria" /><input v-model="secretariaForm.responsavel" class="input" placeholder="Responsável" /><input v-model="secretariaForm.contato" class="input" placeholder="Contato" /></div>
+          <button v-if="isAdmin && showFormSecretaria" @click="addSecretaria" class="btn" :disabled="isUploading">{{ isUploading ? 'Processando...' : 'Adicionar Secretaria' }}</button>
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm"><thead><tr class="text-left border-b"><th class="py-2">Secretaria</th><th>Responsável</th><th>Contato</th><th></th></tr></thead><tbody><tr v-for="s in secretarias" :key="s.id" class="border-b" v-show="isAdmin || s.nome === currentUser.secretaria"><td class="py-2"><input v-model="s.nome" class="input" :readonly="!isAdmin" /></td><td><input v-model="s.responsavel" class="input" :readonly="!isAdmin && s.nome !== currentUser.secretaria" @change="updateSecretaria(s)" /></td><td><input v-model="s.contato" class="input" :readonly="!isAdmin && s.nome !== currentUser.secretaria" @change="updateSecretaria(s)" /></td><td><button v-if="isAdmin" @click="removeSecretaria(s.id)" class="chip rose">Excluir</button></td></tr></tbody></table>
+          </div>
+        </div>
+      </section>
+
+      <section v-if="isAuthenticated && userPermissions.canViewAuditoria && activeTab==='auditoria'" class="space-y-6">
+        <h2 class="title">Auditoria (Logs)</h2>
+        <div class="panel overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead><tr class="text-left border-b"><th class="py-2">Data/Hora</th><th>Usuário</th><th>Secretaria</th><th>Ação</th><th>Módulo</th><th>Detalhes</th></tr></thead>
+            <tbody>
+              <tr v-for="log in auditLogsSorted" :key="log.id" class="border-b">
+                <td class="py-2">{{ fmtDateTime(log.data_hora) }}</td><td>{{ log.usuario_nome || '-' }}</td><td>{{ log.secretaria || '-' }}</td><td>{{ log.acao || '-' }}</td><td>{{ log.modulo || '-' }}</td><td>{{ log.detalhes || '-' }}</td>
+              </tr>
+              <tr v-if="!auditLogsSorted.length"><td colspan="6" class="py-3 text-emerald-700">Sem registros de auditoria.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section v-if="isAuthenticated && activeTab==='legalRepo'" class="space-y-6">
+        <h2 class="title">Repositório Governamental</h2>
+        <div class="panel">
+          <div class="grid md:grid-cols-3 gap-3">
+            <input v-model="repoFormFolder" class="input" placeholder="Nova pasta" />
+            <input v-model="repoFormFile" class="input" placeholder="Novo arquivo" />
+            <select v-model="repoFormTargetFolder" class="input"><option value="">Pasta destino</option><option v-for="f in legalRepoFolders" :key="f.id" :value="f.id">{{ f.nome }}</option></select>
+          </div>
+          <div class="flex gap-2 mt-3">
+            <button class="btn" @click="addRepoFolder">Criar Pasta</button>
+            <button class="btn" @click="addRepoFile">Adicionar Arquivo</button>
+          </div>
+        </div>
+        <div class="grid md:grid-cols-2 xl:grid-cols-3 gap-4">
+          <div v-for="folder in legalRepoFolders" :key="folder.id" class="card">
+            <p class="font-semibold text-govBlue">{{ folder.nome }}</p>
+            <div class="mt-3 space-y-2">
+              <div v-for="file in legalRepoFiles.filter(x => x.pastaId === folder.id)" :key="file.id" class="p-2 rounded border bg-white/70 flex justify-between items-center">
+                <span class="text-sm">{{ file.nome }}</span>
+                <button class="chip" @click="openMoveModal(file)">📦</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div v-if="moveModal.show" class="fixed inset-0 bg-slate-900/50 flex items-center justify-center z-50">
+          <div class="panel w-full max-w-md">
+            <h3 class="subtitle">Mover Arquivo</h3>
+            <p class="text-sm mb-3">{{ moveModal.file ? moveModal.file.nome : '' }}</p>
+            <select v-model="moveModal.targetFolderId" class="input"><option v-for="f in legalRepoFolders" :key="'mv-'+f.id" :value="f.id">{{ f.nome }}</option></select>
+            <div class="flex justify-end gap-2 mt-4">
+              <button class="chip" @click="moveModal.show=false">Cancelar</button>
+              <button class="btn" @click="confirmMoveFile">Mover</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div v-if="toast.show" class="fixed top-4 right-4 z-50 px-4 py-2 rounded-lg shadow-soft text-sm" :class="toast.type==='error' ? 'bg-rose-600 text-white' : 'bg-emerald-600 text-white'">{{ toast.message }}</div>
+      <div v-if="idleWarningVisible" class="fixed bottom-4 right-4 z-50 px-4 py-3 rounded-lg bg-amber-500 text-white shadow-soft">
+        Sessão expira em {{ idleCountdown }}s por inatividade.
+      </div>
+      <datalist id="secretarias-list"><option v-for="s in secretarias" :key="s.id" :value="s.nome"></option></datalist>
+    </main>
+  </div>
+
+  <style>
+    .input { width:100%; border:1px solid rgb(203 213 225); border-radius:.75rem; padding:.5rem .75rem; background:#fff; }
+    textarea.input { min-height:84px; }
+    .panel, .card { background:rgba(255,255,255,.72); border-radius:1rem; padding:1.25rem; box-shadow:0 10px 35px rgba(15,23,42,.12); backdrop-filter: blur(10px); border:1px solid rgba(255,255,255,.45); }
+    .btn { background-image:linear-gradient(to right,#1d4ed8,#3730a3); color:#fff; border-radius:.75rem; padding:.5rem 1rem; transition:transform .15s ease, opacity .15s ease; }
+    .btn:hover { transform:scale(1.02); }
+    .chip { font-size:.75rem; border-radius:.5rem; padding:.25rem .5rem; }
+    .chip.rose { background:#ffe4e6; color:#be123c; }
+    .chip.amber { background:#fef3c7; color:#92400e; }
+    .kpi { font-size:1.8rem; font-weight:700; }
+    .muted { color:#64748b; font-size:.85rem; }
+    .title { font-size:1.5rem; font-weight:700; color:#0b3a75; }
+    .subtitle { font-weight:600; margin-bottom:1rem; }
+  </style>
+
+  <script>
+    const SUPABASE_URL = "https://wrubkbkkvwlraiznoruz.supabase.co";
+    const SUPABASE_KEY = "sb_publishable_4KOkNiKl6UXbBP0HFONDwg_sMXqR6Xj";
+    const dbClient = (window.supabase && window.supabase.createClient) ? window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY) : null;
+    const authClient = (window.supabase && window.supabase.createClient) ? window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: false } }) : null;
+
+    const gerarId = () => Date.now().toString(36) + Math.random().toString(36).substring(2, 10);
+
+    const { createApp } = Vue;
+    createApp({
+      data() {
+        const today = new Date().toISOString().slice(0,10);
+        return {
+          tabs: [
+            { id:'dashboard', label:'Dashboard' },
+            { id:'pendencias', label:'Minhas Pendências' },
+            { id:'lai', label:'Gestão LAI' },
+            { id:'in32', label:'IN 32/2026' },
+            { id:'pntp', label:'PNTP 2026' },
+            { id:'decreto', label:'Decreto 23.230/2025' },
+            { id:'sigilo', label:'Sigilo Documental' },
+            { id:'auditoria', label:'Auditoria (Logs)' },
+            { id:'legalRepo', label:'Repositório Legal' },
+            { id:'config', label:'Configurações' }
+          ],
+          activeTab:'dashboard',
+          mobileMenuOpen:false,
+          sessionUser:null,
+          dbClient,
+          authSubscription:null,
+          authError:'',
+          loginForm:{ email:'', password:'' },
+          userForm:{ nome:'', username:'', password:'', role:'SECRETARIA', secretaria:'' },
+          pwdForm:{ current:'', newPass:'', confirm:'' },
+          globalSearch:'',
+          debouncedSearch:'',
+          searchDebounceHandle:null,
+          nowStamp: new Date().toLocaleString('pt-BR'),
+          toast:{ show:false, message:'', type:'success' },
+          isLoading:false,
+          isUploading:false,
+          idleTimeoutHandle:null,
+          idleWarningHandle:null,
+          idleWarningVisible:false,
+          idleCountdown:60,
+          idleIntervalHandle:null,
+          activityHandler:null,
+          showFormLai:false,
+          showFormIn32:false,
+          showFormPntp:false,
+          showFormDecreto:false,
+          showFormSigilo:false,
+          showFormUser:false,
+          showFormSecretaria:false,
+          editingUserId:null,
+          laiForm:{ protocolo:'', dataPedido:today, requerente:'', dataResposta:'', fundamentoLegal:'', descricao:'', secretaria:'', selectedSecretarias:[] },
+          in32Form:{ criterio:'', subcriterio:'', status:'Não Conforme', secretaria:'', responsavel:'', localPublicacao:'', ultimaChecagem:today, frequenciaDias:30, obs:'', selectedSecretarias:[] },
+          pntpForm:{ criterio:'', secretaria:'', responsavel:'', localPublicacao:'', obs:'', exigeDisponibilidade:true, exigeAtualidade:true, exigeSerie:true, instrucoes:'', instrucaoDisponibilidade:'', instrucaoAtualidade:'', instrucaoSerie:'', justificativa:'', selectedSecretarias:[] },
+          decretoForm:{ obrigacao:'', subitem:'', baseLegal:'Decreto 23.230/2025', localImplementacao:'', secretaria:'', responsavel:'', prazo:today, prioridade:'Alta', status:'Pendente', evidencia:'', obs:'', selectedSecretarias:[] },
+          sigiloForm:{ titulo:'', numeroDocumento:'', grauSigilo:'Reservado', baseLegal:'Lei 12.527/2011, art. 24', autoridadeClassificadora:'', dataClassificacao:today, prazoReavaliacao:'', statusSigilo:'Classificado', dataDesclassificacao:'', motivoDesclassificacao:'', autoridadeDesclassificou:'', localArquivo:'', obs:'' },
+          secretariaForm:{ nome:'', responsavel:'', contato:'' },
+          repoFormFolder:'',
+          repoFormFile:'',
+          repoFormTargetFolder:'',
+          moveModal:{ show:false, file:null, targetFolderId:'' },
+          users:[
+            { id:gerarId(), nome:'Administrador', username:'admin', password:'admin123', role:'ADMIN', secretaria:'' },
+            { id:gerarId(), nome:'Equipe SEMED', username:'semed', password:'semed123', role:'SECRETARIA', secretaria:'SEMED' }
+          ],
+          secretarias:[
+            { id:gerarId(), nome:'CGM', responsavel:'', contato:'' },
+            { id:gerarId(), nome:'SEMFAZ/DTPD', responsavel:'', contato:'' },
+            { id:gerarId(), nome:'IPEMA', responsavel:'', contato:'' }
+          ],
+          laiRequests:[],
+          in32Checklist:[
+            { id:gerarId(), criterio:'Renúncias de Receitas', subcriterio:'Desonerações Fiscais', secretaria:'SEMFAZ/DTPD', responsavel:'', localPublicacao:'Portal > Receitas > Renúncias', status:'Não Conforme', obs:'', ultimaChecagem:today },
+            { id:gerarId(), criterio:'RPPS', subcriterio:'Publicações previdenciárias', secretaria:'IPEMA', responsavel:'', localPublicacao:'Portal > Previdência', status:'Não Conforme', obs:'', ultimaChecagem:today }
+          ],
+          pntpChecklist:[
+            { id:gerarId(), criterio:'Governança', subcriterio:'Currículos Diretoria', secretaria:'CGM', responsavel:'', localPublicacao:'Portal > Institucional', disponibilidade:false, atualidade:false, serieHistorica:false, obs:'' }
+          ],
+          decretoTasks:[
+            { id:gerarId(), obrigacao:'Formalizar fluxo interno e-SIC', subitem:'Definir responsáveis por secretaria', baseLegal:'Decreto 23.230/2025', localImplementacao:'Ouvidoria/e-SIC', secretaria:'CGM', responsavel:'', prazo:today, prioridade:'Alta', status:'Pendente', evidencia:'', obs:'' }
+          ],
+          sigiloDocs:[],
+          auditLogs:[],
+          legalRepoFolders:[],
+          legalRepoFiles:[]
+        }
+      },
+      computed: {
+        currentUser() { return this.sessionUser; },
+        isAuthenticated() { return !!this.currentUser; },
+        isAdmin() { return this.currentUser && this.currentUser.role === 'ADMIN'; },
+        userPermissions() {
+          return {
+            canAccessRestrictedModules: this.isAdmin,
+            canViewSigilo: this.isAdmin,
+            canViewAuditoria: this.isAdmin,
+            canManageUsers: this.isAdmin
+          };
+        },
+        filteredLaiRequests() { return this.applySearch(this.byRoleFilter(this.laiRequests), ['protocolo','requerente','secretaria','descricao']); },
+        filteredIn32() { return this.applySearch(this.byRoleFilter(this.in32Checklist), ['criterio','subcriterio','secretaria','responsavel','localPublicacao']); },
+        filteredPntp() { return this.applySearch(this.byRoleFilter(this.pntpChecklist), ['criterio','subcriterio','secretaria','responsavel','localPublicacao']); },
+        filteredDecreto() { return this.applySearch(this.byRoleFilter(this.decretoTasks), ['obrigacao','subitem','secretaria','responsavel','baseLegal']); },
+        filteredSigilo() { return this.applySearch(this.sigiloDocs, ['titulo','numeroDocumento','baseLegal','statusSigilo','grauSigilo']); },
+        laiOpen() { return this.laiRequests.filter(r => this.effectiveStatus(r) !== 'Respondido').length; },
+        laiAnswered() { return this.laiRequests.filter(r => this.effectiveStatus(r) === 'Respondido').length; },
+        laiLate() { return this.laiRequests.filter(r => this.effectiveStatus(r) === 'Atrasado').length; },
+        in32Compliance() {
+          const valid = this.in32Checklist.filter(i => i.status !== 'Não Aplicável');
+          return valid.length ? Math.round(valid.filter(i=>i.status==='Conforme').length / valid.length * 100) : 100;
+        },
+        pntpCompliance() {
+          const total = this.pntpChecklist.length * 3;
+          const ok = this.pntpChecklist.reduce((a,i)=>a+(i.disponibilidade?1:0)+(i.atualidade?1:0)+(i.serieHistorica?1:0),0);
+          return total ? Math.round(ok/total*100) : 0;
+        },
+        decretoDone() { return this.decretoTasks.filter(d=>d.status==='Concluída').length; },
+        decretoInProgress() { return this.decretoTasks.filter(d=>d.status==='Em Execução').length; },
+        decretoOverdue() {
+          const now = this.todayDate();
+          return this.decretoTasks.filter(d => d.status !== 'Concluída' && d.prazo && new Date(d.prazo+'T00:00:00') < now).length;
+        },
+        decretoCompliance() { return this.decretoTasks.length ? Math.round(this.decretoDone / this.decretoTasks.length * 100) : 0; },
+        overallCompliance() { return Math.round((this.in32Compliance + this.pntpCompliance + this.decretoCompliance) / 3); },
+        laiBarData() {
+          const total = Math.max(this.laiRequests.length,1);
+          return [
+            { label:'Abertos', value:this.laiOpen, percent:Math.round(this.laiOpen/total*100), color:'bg-blue-600' },
+            { label:'Respondidos', value:this.laiAnswered, percent:Math.round(this.laiAnswered/total*100), color:'bg-emerald-600' },
+            { label:'Atrasados', value:this.laiLate, percent:Math.round(this.laiLate/total*100), color:'bg-rose-600' }
+          ];
+        },
+        avgResponseDays() {
+          const responded = this.laiRequests.filter(r => this.effectiveStatus(r)==='Respondido');
+          if (!responded.length) return 0;
+          const total = responded.reduce((sum, r)=> sum + this.diffDays(r.dataPedido, r.prazoLegal), 0);
+          return Math.round(total / responded.length);
+        },
+        avgLaiResponseDays() {
+          const responded = this.laiRequests.filter(r => r.dataResposta);
+          if (!responded.length) return 0;
+          const total = responded.reduce((sum, r)=> sum + this.diffDays(r.dataPedido, r.dataResposta), 0);
+          return Math.round(total / responded.length);
+        },
+        transparencyHealth() {
+          const laiScore = this.laiRequests.length ? Math.round((this.laiAnswered / this.laiRequests.length) * 100) : 100;
+          return Math.round((laiScore + this.overallCompliance) / 2);
+        },
+        mapaIn32() {
+          return this.groupByCriterio(this.in32Checklist, (i) => i.status);
+        },
+        mapaPntp() {
+          return this.groupByCriterio(this.pntpChecklist, (i) => ((i.exigeDisponibilidade && !i.disponibilidade) || (i.exigeAtualidade && !i.atualidade) || (i.exigeSerie && !i.serieHistorica)) ? 'Não Conforme' : 'Conforme');
+        },
+        mapaDecreto() {
+          return this.groupByCriterio(this.decretoTasks, (i) => i.status);
+        },
+        minhasPendencias() {
+          const pend = [];
+          const sec = (this.currentUser && this.currentUser.secretaria) ? this.currentUser.secretaria : '';
+          this.laiRequests.filter(i => this.normalizeSecretarias(i.secretaria).includes(String(sec).toUpperCase()) && this.effectiveStatus(i) !== 'Respondido').forEach(i => pend.push({ tipo:'LAI', descricao:`${i.protocolo} - ${this.effectiveStatus(i)}`, tabTarget:'lai' }));
+          this.in32Checklist.filter(i => this.normalizeSecretarias(i.secretaria).includes(String(sec).toUpperCase()) && i.status === 'Não Conforme').forEach(i => pend.push({ tipo:'IN32', descricao:i.criterio, tabTarget:'in32' }));
+          this.pntpChecklist.filter(i => this.normalizeSecretarias(i.secretaria).includes(String(sec).toUpperCase())).forEach(i => {
+            const naoAtende = (i.exigeDisponibilidade && !i.disponibilidade) || (i.exigeAtualidade && !i.atualidade) || (i.exigeSerie && !i.serieHistorica);
+            if (naoAtende) pend.push({ tipo:'PNTP', descricao:i.criterio, tabTarget:'pntp' });
+          });
+          this.decretoTasks.filter(i => this.normalizeSecretarias(i.secretaria).includes(String(sec).toUpperCase()) && ['Pendente','Em Execução'].includes(i.status)).forEach(i => pend.push({ tipo:'Decreto', descricao:i.obrigacao, tabTarget:'decreto' }));
+          return pend;
+        },
+        smartAlerts() {
+          if (this.isAdmin) {
+            const grouped = {};
+            this.decretoTasks.forEach(t => {
+              if (!['Pendente','Em Execução'].includes(t.status)) return;
+              grouped[t.obrigacao] = (grouped[t.obrigacao] || 0) + 1;
+            });
+            return Object.entries(grouped).map(([k,v],idx) => ({ id:'g'+idx, level:'alto', title:`${k} pendente`, detail:`Pendente em ${v} secretaria(s)` }));
+          }
+          const alerts = [];
+          this.laiRequests.forEach(r => {
+            const st = this.effectiveStatus(r);
+            if (st === 'Atrasado') alerts.push({ id:r.id+'a', level:'alto', title:'LAI atrasada', detail:`${r.protocolo} - ${r.secretaria}` });
+          });
+          return alerts.slice(0,25);
+        },
+        auditLogsSorted() {
+          return [...this.auditLogs].sort((a,b) => new Date(b.data_hora || 0) - new Date(a.data_hora || 0));
+        }
+      },
+      watch: {
+        globalSearch(val) {
+          if (this.searchDebounceHandle) clearTimeout(this.searchDebounceHandle);
+          this.searchDebounceHandle = setTimeout(() => {
+            this.debouncedSearch = val;
+          }, 300);
+        }
+      },
+      methods: {
+        todayDate() { const d = new Date(); d.setHours(0,0,0,0); return d; },
+        fmtDate(v) { if(!v) return '-'; const [y,m,d]=v.split('-'); return `${d}/${m}/${y}`; },
+        fmtDateTime(v) { if(!v) return '-'; return new Date(v).toLocaleString('pt-BR'); },
+        isSigiloUrgente(doc) {
+          if (!doc || !doc.prazoReavaliacao) return false;
+          const diff = Math.ceil((new Date(doc.prazoReavaliacao + 'T00:00:00') - this.todayDate())/86400000);
+          return diff >= 0 && diff < 30;
+        },
+        diffDays(start, end) { if(!start || !end) return 0; return Math.max(0, Math.ceil((new Date(end+'T00:00:00') - new Date(start+'T00:00:00'))/86400000)); },
+        applySearch(list, fields) {
+          const q = (this.debouncedSearch || '').trim().toLowerCase();
+          if (!q) return list;
+          return list.filter(item => fields.some(f => String(item[f] || '').toLowerCase().includes(q)));
+        },
+        normalizeSecretarias(value) {
+          if (!value) return [];
+          if (Array.isArray(value)) return value.map(v => String(v).trim().toUpperCase()).filter(Boolean);
+          return String(value).split(',').map(v => v.trim().toUpperCase()).filter(Boolean);
+        },
+        byRoleFilter(list) {
+          if (this.isAdmin) return list;
+          const sec = (this.currentUser && this.currentUser.secretaria) ? String(this.currentUser.secretaria).trim().toUpperCase() : '';
+          return list.filter(i => {
+            const responsaveis = this.normalizeSecretarias(i.secretaria);
+            return responsaveis.includes(sec);
+          });
+        },
+        groupByCriterio(list, statusResolver) {
+          const map = {};
+          list.forEach(i => {
+            const key = i.criterio || i.obrigacao || 'Item';
+            if (!map[key]) map[key] = { chave:key, criterio:key, secretarias:[] };
+            map[key].secretarias.push({ nome:i.secretaria, status: statusResolver(i) });
+          });
+          return Object.values(map);
+        },
+        statusBadgeClass(status) {
+          if (status === 'Conforme' || status === 'Concluída') return 'bg-emerald-100 text-emerald-700';
+          if (status === 'Em Execução' || status === 'No Prazo') return 'bg-amber-100 text-amber-800';
+          return 'bg-rose-100 text-rose-700';
+        },
+        isIn32ReviewDue(item) {
+          if (!item.ultimaChecagem || !item.frequenciaDias) return false;
+          const base = new Date(item.ultimaChecagem + 'T00:00:00');
+          base.setDate(base.getDate() + Number(item.frequenciaDias));
+          return base < this.todayDate();
+        },
+        setupRealtime() {
+          if (!dbClient) return;
+          const tables = ['lairequests','in32checklist','pntpchecklist','decretotasks','sigilodocs','secretarias','users','audit_logs','legal_folders','legal_files'];
+          tables.forEach((table) => {
+            dbClient.channel('rt-'+table)
+              .on('postgres_changes', { event:'*', schema:'public', table }, (payload) => {
+                this.handleRealtime(table, payload);
+              }).subscribe();
+          });
+        },
+        handleRealtime(table, payload) {
+          const map = {
+            lairequests:'laiRequests', in32checklist:'in32Checklist', pntpchecklist:'pntpChecklist',
+            decretotasks:'decretoTasks', sigilodocs:'sigiloDocs', secretarias:'secretarias', users:'users', audit_logs:'auditLogs', legal_folders:'legalRepoFolders', legal_files:'legalRepoFiles'
+          };
+          const arrName = map[table];
+          if (!arrName) return;
+          const arr = this[arrName];
+          if (payload.eventType === 'INSERT') arr.unshift(payload.new);
+          if (payload.eventType === 'UPDATE') {
+            const idx = arr.findIndex(i => i.id === payload.new.id);
+            if (idx >= 0) arr[idx] = payload.new;
+          }
+          if (payload.eventType === 'DELETE') {
+            this[arrName] = arr.filter(i => i.id !== payload.old.id);
+          }
+        },
+        async registrarLog(acao, modulo, detalhes) {
+          if (!this.ensureSupabase()) return;
+          const detalhesPayload = typeof detalhes === 'object' ? detalhes : { mensagem: detalhes };
+          const payload = {
+            usuario_nome: this.currentUser ? this.currentUser.nome : 'Sistema',
+            secretaria: this.currentUser ? (this.currentUser.secretaria || 'N/A') : 'N/A',
+            acao, modulo, detalhes: detalhesPayload
+          };
+          const { error } = await this.dbClient.from('audit_logs').insert([payload]);
+          if (error) console.error('Erro de Log:', error.message);
+        },
+        resetInactivityTimer() {
+          if (this.idleTimeoutHandle) clearTimeout(this.idleTimeoutHandle);
+          if (this.idleWarningHandle) clearTimeout(this.idleWarningHandle);
+          if (this.idleIntervalHandle) clearInterval(this.idleIntervalHandle);
+          this.idleWarningVisible = false;
+          this.idleCountdown = 60;
+          if (!this.isAuthenticated) return;
+          this.idleWarningHandle = setTimeout(() => {
+            this.idleWarningVisible = true;
+            this.idleCountdown = 60;
+            this.idleIntervalHandle = setInterval(() => {
+              this.idleCountdown = Math.max(0, this.idleCountdown - 1);
+            }, 1000);
+          }, 14 * 60 * 1000);
+          this.idleTimeoutHandle = setTimeout(() => {
+            this.logout();
+          }, 15 * 60 * 1000);
+        },
+        async addRepoFolder() {
+          if (!this.repoFormFolder) return;
+          const payload = { id: gerarId(), nome: this.repoFormFolder };
+          const { data, error } = await this.dbClient.from('legal_folders').insert([payload]).select().single();
+          if (error) return this.showToast('Erro ao criar pasta: ' + error.message, 'error');
+          this.legalRepoFolders.unshift(data);
+          this.repoFormFolder = '';
+        },
+        async addRepoFile() {
+          if (!this.repoFormFile || !this.repoFormTargetFolder) return;
+          const payload = { id: gerarId(), nome: this.repoFormFile, pastaId: this.repoFormTargetFolder, updatedAt: new Date().toISOString() };
+          const { data, error } = await this.dbClient.from('legal_files').insert([payload]).select().single();
+          if (error) return this.showToast('Erro ao criar arquivo: ' + error.message, 'error');
+          this.legalRepoFiles.unshift(data);
+          this.repoFormFile = '';
+        },
+        openMoveModal(file) {
+          this.moveModal = { show:true, file, targetFolderId:file.pastaId };
+        },
+        async confirmMoveFile() {
+          if (!this.moveModal.file) return;
+          const { data, error } = await this.dbClient.from('legal_files').update({ pastaId: this.moveModal.targetFolderId }).eq('id', this.moveModal.file.id).select().single();
+          if (error) return this.showToast('Erro ao mover arquivo: ' + error.message, 'error');
+          this.moveModal.file.pastaId = data.pastaId;
+          this.moveModal.show = false;
+        },
+        async uploadEvidencia(event, item, tabela) {
+          if (!this.ensureSupabase()) return;
+          const file = event.target.files && event.target.files[0];
+          if (!file) return;
+          this.isUploading = true;
+          try {
+            const ext = file.name.split('.').pop();
+            const salt = Math.random().toString(36).substring(2, 8);
+            const filePath = `${tabela}/${item.id}/${Date.now()}-${salt}.${ext}`;
+            const { error: upErr } = await dbClient.storage.from('evidencias').upload(filePath, file, { upsert:true });
+            if (upErr) return this.showToast('Erro no upload: ' + upErr.message, 'error');
+            const { data } = dbClient.storage.from('evidencias').getPublicUrl(filePath);
+            const url = data.publicUrl;
+            const field = tabela === 'sigilodocs' ? 'localArquivo' : 'evidencia';
+            item[field] = url;
+            const { error } = await dbClient.from(tabela).update({ [field]: url }).eq('id', item.id);
+            if (error) return this.showToast('Erro ao salvar evidência: ' + error.message, 'error');
+            await this.registrarLog('Upload Evidência', tabela, `Anexou arquivo em ${item.id}`);
+            this.showToast('Evidência anexada com sucesso');
+          } catch (e) {
+            this.showToast('Falha inesperada ao enviar evidência.', 'error');
+          } finally {
+            this.isUploading = false;
+            event.target.value = '';
+          }
+        },
+        ensureSupabase() {
+          if (this.dbClient) return true;
+          this.showToast('Supabase indisponível no momento. Verifique conexão/CDN e recarregue a página.', 'error');
+          return false;
+        },
+        async withTimeout(promise, ms = 10000) {
+          let timer;
+          const timeout = new Promise((_, reject) => {
+            timer = setTimeout(() => reject(new Error('Conexão lenta detectada. Tentando reconectar...')), ms);
+          });
+          try {
+            return await Promise.race([promise, timeout]);
+          } finally {
+            clearTimeout(timer);
+          }
+        },
+        async loadInitialTable(tableName, handler, selectExpr='*') {
+          try {
+            const res = await this.withTimeout(this.dbClient.from(tableName).select(selectExpr), 10000);
+            if (res && !res.error) handler(res.data || []);
+            else if (res && res.error) this.showToast(`Falha ao carregar ${tableName}.`, 'error');
+          } catch (e) {
+            this.showToast(e.message || `Falha ao carregar ${tableName}.`, 'error');
+          }
+        },
+        async fetchUserProfileByEmail(email) {
+          if (!this.ensureSupabase()) return null;
+          const { data, error } = await this.dbClient.from('users').select('id, nome, username, role, secretaria').eq('username', email).maybeSingle();
+          if (error) {
+            this.showToast('Erro ao buscar perfil de acesso.', 'error');
+            return null;
+          }
+          return data || null;
+        },
+        async syncSessionUser(authUser) {
+          if (!authUser || !authUser.email) { this.sessionUser = null; return; }
+          const profile = await this.fetchUserProfileByEmail(authUser.email);
+          if (!profile) {
+            this.showToast('Usuário autenticado sem perfil de autorização.', 'error');
+            await this.dbClient.auth.signOut();
+            this.sessionUser = null;
+            return;
+          }
+          this.sessionUser = profile;
+          this.authError = '';
+          this.activeTab = 'dashboard';
+          this.resetInactivityTimer();
+        },
+        async login() {
+          if (!this.ensureSupabase()) return;
+          const { data, error } = await this.dbClient.auth.signInWithPassword({ email: this.loginForm.email, password: this.loginForm.password });
+          if (error) {
+            this.authError = 'Falha na autenticação.';
+            return this.showToast(error.message || 'Credenciais inválidas.', 'error');
+          }
+          await this.syncSessionUser(data && data.user ? data.user : null);
+          await this.registrarLog('Login', 'Acesso', 'Usuário entrou no sistema');
+          this.loginForm = { email:'', password:'' };
+        },
+        async logout() {
+          await this.registrarLog('Logout', 'Sistema', 'Usuário saiu voluntariamente');
+          if (this.dbClient) await this.dbClient.auth.signOut();
+          this.sessionUser = null;
+          this.activeTab = 'dashboard';
+          this.idleWarningVisible = false;
+          if (this.idleTimeoutHandle) clearTimeout(this.idleTimeoutHandle);
+          if (this.idleWarningHandle) clearTimeout(this.idleWarningHandle);
+          if (this.idleIntervalHandle) clearInterval(this.idleIntervalHandle);
+        },
+        submitUserForm() {
+          if (this.editingUserId) return this.saveUserProfile();
+          return this.addUser();
+        },
+        editUser(user) {
+          this.editingUserId = user.id;
+          this.showFormUser = true;
+          this.userForm = { nome:user.nome || '', username:user.username || '', password:'', role:user.role || 'SECRETARIA', secretaria:user.secretaria || '' };
+        },
+        cancelEditUser() {
+          this.editingUserId = null;
+          this.userForm = { nome:'', username:'', password:'', role:'SECRETARIA', secretaria:'' };
+        },
+        async addUser() {
+          if (!this.ensureSupabase()) return;
+          if (!this.isAdmin) return;
+          if (!this.userForm.nome || !this.userForm.username || !this.userForm.password) return;
+          if (this.users.some(u => u.username === this.userForm.username)) { this.showToast('Usuário já existente.', 'error'); return; }
+          this.isUploading = true;
+          try {
+            const authRes = await authClient.auth.signUp({ email: this.userForm.username, password: this.userForm.password });
+            if (authRes.error) return this.showToast('Erro ao criar usuário no Auth: ' + authRes.error.message, 'error');
+            const authUserId = authRes.data && authRes.data.user ? authRes.data.user.id : null;
+            const payload = { id: authUserId || gerarId(), nome:this.userForm.nome, username:this.userForm.username, role:this.userForm.role, secretaria:this.userForm.secretaria };
+            const { data, error } = await this.dbClient.from('users').insert([payload]).select('id, nome, username, role, secretaria').single();
+            if (error) return this.showToast('Erro ao criar usuário: ' + error.message, 'error');
+            if (data) this.users.unshift(data);
+            await this.registrarLog('Adicionou', 'Usuários', `Criou usuário ${this.userForm.username}`);
+            this.showToast('Usuário criado com sucesso');
+            this.userForm = { nome:'', username:'', password:'', role:'SECRETARIA', secretaria:'' };
+          } catch (err) {
+            this.showToast(err.message, 'error');
+          } finally {
+            this.isUploading = false;
+          }
+        },
+        async saveUserProfile() {
+          if (!this.ensureSupabase()) return;
+          if (!this.isAdmin || !this.editingUserId) return;
+          if (!this.userForm.nome || !this.userForm.username) return this.showToast('Preencha nome e e-mail do usuário.', 'error');
+          this.isUploading = true;
+          try {
+            const rpcPayload = {
+              user_id: this.editingUserId,
+              new_email: this.userForm.username,
+              new_password: this.userForm.password && this.userForm.password.trim() ? this.userForm.password : null
+            };
+            const { error: authError } = await this.dbClient.rpc('admin_update_user_auth', rpcPayload);
+            if (authError) return this.showToast('Erro ao sincronizar credenciais no Auth: ' + authError.message, 'error');
+            const payload = { nome:this.userForm.nome, username:this.userForm.username, role:this.userForm.role, secretaria:this.userForm.secretaria };
+            const { data, error } = await this.dbClient.from('users').update(payload).eq('id', this.editingUserId).select('id, nome, username, role, secretaria').single();
+            if (error) return this.showToast('Erro ao atualizar usuário: ' + error.message, 'error');
+            const idx = this.users.findIndex(u => u.id === this.editingUserId);
+            if (idx >= 0) this.users[idx] = data;
+            await this.registrarLog('Atualizou', 'Usuários', `Editou usuário ${data.username}`);
+            this.showToast('Usuário atualizado com sucesso');
+            this.cancelEditUser();
+          } catch (err) {
+            this.showToast(err.message, 'error');
+          } finally {
+            this.isUploading = false;
+          }
+        },
+        async removeUser(id) {
+          if (!this.ensureSupabase()) return;
+          if (!this.isAdmin) return;
+          const { error } = await dbClient.from('users').delete().eq('id', id);
+          if (error) return this.showToast('Erro ao excluir usuário: ' + error.message, 'error');
+          this.users = this.users.filter(u => u.id !== id);
+          await this.registrarLog('Removeu', 'Usuários', `Excluiu usuário ${id}`);
+          this.showToast('Usuário excluído com sucesso');
+        },
+        async changeMyPassword() {
+          if (!this.isAuthenticated) return;
+          if (!this.pwdForm.current || !this.pwdForm.newPass || !this.pwdForm.confirm) return this.showToast('Preencha todos os campos de senha.', 'error');
+          if (this.pwdForm.newPass !== this.pwdForm.confirm) return this.showToast('A confirmação da nova senha não confere.', 'error');
+          if (!this.ensureSupabase()) return;
+          this.isUploading = true;
+          try {
+            const email = this.currentUser && this.currentUser.username ? this.currentUser.username : '';
+            const reauth = await this.dbClient.auth.signInWithPassword({ email, password: this.pwdForm.current });
+            if (reauth.error) return this.showToast('Senha atual incorreta.', 'error');
+            const { error } = await this.dbClient.auth.updateUser({ password: this.pwdForm.newPass });
+            if (error) return this.showToast('Erro ao atualizar senha: ' + error.message, 'error');
+            await this.registrarLog('Atualizou', 'Usuários', `Alterou a própria senha`);
+            this.pwdForm = { current:'', newPass:'', confirm:'' };
+            this.showToast('Senha atualizada com sucesso.');
+          } finally {
+            this.isUploading = false;
+          }
+        },
+        async addLaiRequest() {
+          if (!this.ensureSupabase()) return;
+          if (!this.laiForm.protocolo || !this.laiForm.dataPedido || !this.laiForm.requerente) return;
+          if (!this.laiForm.selectedSecretarias.length) return this.showToast('Selecione ao menos uma secretaria.', 'error');
+          this.isUploading = true;
+          try {
+            const prazo = new Date(this.laiForm.dataPedido+'T00:00:00'); prazo.setDate(prazo.getDate()+20);
+            for (const secNome of this.laiForm.selectedSecretarias) {
+              const secObj = this.secretarias.find(s => s.nome === secNome);
+              const payload = { id:gerarId(), protocolo:this.laiForm.protocolo, dataPedido:this.laiForm.dataPedido, requerente:this.laiForm.requerente, dataResposta:this.laiForm.dataResposta, fundamentoLegal:this.laiForm.fundamentoLegal, descricao:this.laiForm.descricao, secretaria:secNome, responsavel:(secObj && secObj.responsavel) ? secObj.responsavel : '', prazoLegal:prazo.toISOString().slice(0,10), statusManual:'' };
+              const { data, error } = await dbClient.from('lairequests').insert([payload]).select().single();
+              if (!error) {
+                this.laiRequests.unshift(data);
+                await this.registrarLog('Adicionou', 'LAI', `Criou protocolo ${data.protocolo} para ${data.secretaria}`);
+              }
+            }
+            this.laiForm = { protocolo:'', dataPedido:new Date().toISOString().slice(0,10), requerente:'', dataResposta:'', fundamentoLegal:'', descricao:'', secretaria:'', selectedSecretarias:[] };
+          } finally {
+            this.isUploading = false;
+          }
+        },
+        extendDeadline(req) { const d = new Date(req.prazoLegal+'T00:00:00'); d.setDate(d.getDate()+10); req.prazoLegal = d.toISOString().slice(0,10); },
+        async removeLai(id) {
+          if (!this.ensureSupabase()) return;
+          const { error } = await dbClient.from('lairequests').delete().eq('id', id);
+          if (error) return this.showToast('Erro ao excluir LAI: ' + error.message, 'error');
+          this.laiRequests = this.laiRequests.filter(r=>r.id!==id);
+          await this.registrarLog('Removeu', 'LAI', `Excluiu solicitação ${id}`);
+          this.showToast('Solicitação LAI excluída com sucesso');
+        },
+        effectiveStatus(req) { if (req.statusManual) return req.statusManual; return new Date(req.prazoLegal+'T00:00:00') < this.todayDate() ? 'Atrasado' : 'No Prazo'; },
+        deadlineBadgeClass(req) {
+          const st = this.effectiveStatus(req);
+          if (st==='Respondido') return 'px-2 py-1 rounded bg-emerald-100 text-emerald-700';
+          if (st==='Atrasado') return 'px-2 py-1 rounded bg-rose-100 text-rose-700';
+          const diff = Math.ceil((new Date(req.prazoLegal+'T00:00:00') - this.todayDate())/86400000);
+          return diff<=5 ? 'px-2 py-1 rounded bg-amber-100 text-amber-800' : 'px-2 py-1 rounded bg-blue-100 text-blue-800';
+        },
+        async addIn32Item() {
+          if (!this.ensureSupabase()) return;
+          if(!this.in32Form.criterio || !this.in32Form.subcriterio) return;
+          if (!this.in32Form.selectedSecretarias.length) return this.showToast('Selecione ao menos uma secretaria.', 'error');
+          this.isUploading = true;
+          try {
+            for (const secNome of this.in32Form.selectedSecretarias) {
+              const secObj = this.secretarias.find(s => s.nome === secNome);
+              const payload = { id:gerarId(), ...this.in32Form, secretaria:secNome, responsavel:(secObj && secObj.responsavel) ? secObj.responsavel : '' };
+              delete payload.selectedSecretarias;
+              const { data, error } = await dbClient.from('in32checklist').insert([payload]).select().single();
+              if (!error) {
+                this.in32Checklist.unshift(data);
+                await this.registrarLog('Adicionou', 'IN32', `Criou critério ${data.criterio} (${data.secretaria})`);
+              }
+            }
+            this.in32Form.selectedSecretarias = [];
+          } finally {
+            this.isUploading = false;
+          }
+        },
+        async removeIn32Item(id) {
+          if (!this.ensureSupabase()) return;
+          const { error } = await dbClient.from('in32checklist').delete().eq('id', id);
+          if (error) return this.showToast('Erro ao excluir IN32: ' + error.message, 'error');
+          this.in32Checklist = this.in32Checklist.filter(i=>i.id!==id);
+          await this.registrarLog('Removeu', 'IN32', `Excluiu item ${id}`);
+          this.showToast('Item IN32 excluído com sucesso');
+        },
+        async addPntpItem() {
+          if (!this.ensureSupabase()) return;
+          if(!this.pntpForm.criterio) return;
+          if (!this.pntpForm.selectedSecretarias.length) return this.showToast('Selecione ao menos uma secretaria.', 'error');
+          this.isUploading = true;
+          try {
+            for (const secNome of this.pntpForm.selectedSecretarias) {
+              const secObj = this.secretarias.find(s => s.nome === secNome);
+              const payload = { id:gerarId(), ...this.pntpForm, secretaria:secNome, responsavel:(secObj && secObj.responsavel) ? secObj.responsavel : '', disponibilidade:false, atualidade:false, serieHistorica:false };
+              delete payload.selectedSecretarias;
+              const { data, error } = await dbClient.from('pntpchecklist').insert([payload]).select().single();
+              if (!error) {
+                this.pntpChecklist.unshift(data);
+                await this.registrarLog('Adicionou', 'PNTP', `Criou critério ${data.criterio} (${data.secretaria})`);
+              }
+            }
+            this.pntpForm.selectedSecretarias = [];
+          } finally {
+            this.isUploading = false;
+          }
+        },
+        async removePntpItem(id) {
+          if (!this.ensureSupabase()) return;
+          const { error } = await dbClient.from('pntpchecklist').delete().eq('id', id);
+          if (error) return this.showToast('Erro ao excluir PNTP: ' + error.message, 'error');
+          this.pntpChecklist = this.pntpChecklist.filter(i=>i.id!==id);
+          await this.registrarLog('Removeu', 'PNTP', `Excluiu item ${id}`);
+          this.showToast('Item PNTP excluído com sucesso');
+        },
+        async addDecretoTask() {
+          if (!this.ensureSupabase()) return;
+          if(!this.decretoForm.obrigacao) return;
+          if (!this.decretoForm.selectedSecretarias.length) return this.showToast('Selecione ao menos uma secretaria.', 'error');
+          this.isUploading = true;
+          try {
+            for (const secNome of this.decretoForm.selectedSecretarias) {
+              const secObj = this.secretarias.find(s => s.nome === secNome);
+              const payload = { id:gerarId(), ...this.decretoForm, secretaria:secNome, responsavel:(secObj && secObj.responsavel) ? secObj.responsavel : '' };
+              delete payload.selectedSecretarias;
+              const { data, error } = await dbClient.from('decretotasks').insert([payload]).select().single();
+              if (!error) {
+                this.decretoTasks.unshift(data);
+                await this.registrarLog('Adicionou', 'Decreto', `Criou obrigação ${data.obrigacao} (${data.secretaria})`);
+              }
+            }
+            this.decretoForm.selectedSecretarias = [];
+          } finally {
+            this.isUploading = false;
+          }
+        },
+        async removeDecretoTask(id) {
+          if (!this.ensureSupabase()) return;
+          const { error } = await dbClient.from('decretotasks').delete().eq('id', id);
+          if (error) return this.showToast('Erro ao excluir Decreto: ' + error.message, 'error');
+          this.decretoTasks = this.decretoTasks.filter(i=>i.id!==id);
+          await this.registrarLog('Removeu', 'Decreto', `Excluiu item ${id}`);
+          this.showToast('Item do Decreto excluído com sucesso');
+        },
+        decretoPrazoTexto(item) {
+          if(!item.prazo) return 'Prazo não informado';
+          if(item.status==='Concluída') return 'Concluída';
+          const diff = Math.ceil((new Date(item.prazo+'T00:00:00') - this.todayDate())/86400000);
+          if(diff<0) return `Atrasada ${Math.abs(diff)} dia(s)`;
+          if(diff<=7) return `Vence em ${diff} dia(s)`;
+          return `Dentro do prazo (${diff} dias)`;
+        },
+        decretoPrazoClass(item) {
+          const t = this.decretoPrazoTexto(item);
+          if (t.startsWith('Atrasada')) return 'text-rose-700';
+          if (t.startsWith('Vence')) return 'text-amber-700';
+          if (t==='Concluída') return 'text-emerald-700';
+          return 'text-blue-700';
+        },
+        async addSigiloDoc() {
+          if (!this.ensureSupabase()) return;
+          if(!this.sigiloForm.titulo) return;
+          this.isUploading = true;
+          try {
+            const payload = { id:gerarId(), ...this.sigiloForm, historico:[], novoEvento:'', dataNovoEvento:new Date().toISOString().slice(0,10) };
+            const { data, error } = await dbClient.from('sigilodocs').insert([payload]).select().single();
+            if (error) return this.showToast('Erro ao salvar sigilo: ' + error.message, 'error');
+            this.sigiloDocs.unshift(data);
+            await this.registrarLog('Adicionou', 'Sigilo', `Criou documento ${data.titulo}`);
+            this.showToast('Documento de sigilo criado com sucesso');
+          } finally {
+            this.isUploading = false;
+          }
+        },
+        async removeSigiloDoc(id) {
+          if (!this.ensureSupabase()) return;
+          const { error } = await dbClient.from('sigilodocs').delete().eq('id', id);
+          if (error) return this.showToast('Erro ao excluir documento: ' + error.message, 'error');
+          this.sigiloDocs = this.sigiloDocs.filter(d=>d.id!==id);
+          await this.registrarLog('Removeu', 'Sigilo', `Excluiu documento ${id}`);
+          this.showToast('Documento excluído com sucesso');
+        },
+        addSigiloHistorico(doc) { if(!doc.novoEvento) return; doc.historico.unshift({ data: doc.dataNovoEvento || new Date().toISOString().slice(0,10), texto: doc.novoEvento }); doc.novoEvento=''; },
+        async addSecretaria() {
+          if (!this.ensureSupabase()) return;
+          if(!this.secretariaForm.nome) return;
+          this.isUploading = true;
+          try {
+            const payload = { id:gerarId(), ...this.secretariaForm };
+            const { data, error } = await dbClient.from('secretarias').insert([payload]).select().single();
+            if (error) return this.showToast('Erro ao salvar secretaria: ' + error.message, 'error');
+            this.secretarias.unshift(data);
+            await this.registrarLog('Adicionou', 'Secretarias', `Criou secretaria ${data.nome}`);
+            this.showToast('Secretaria criada com sucesso');
+            this.secretariaForm={ nome:'', responsavel:'', contato:'' };
+          } finally {
+            this.isUploading = false;
+          }
+        },
+        async removeSecretaria(id) {
+          if (!this.ensureSupabase()) return;
+          const { error } = await dbClient.from('secretarias').delete().eq('id', id);
+          if (error) return this.showToast('Erro ao excluir secretaria: ' + error.message, 'error');
+          this.secretarias = this.secretarias.filter(s=>s.id!==id);
+          await this.registrarLog('Removeu', 'Secretarias', `Excluiu secretaria ${id}`);
+          this.showToast('Secretaria excluída com sucesso');
+        },
+        async updateSecretaria(sec) {
+          if (!this.ensureSupabase()) return;
+          if (!this.isAdmin && sec.nome !== this.currentUser.secretaria) return;
+          const payload = { ...sec };
+          const { error } = await dbClient.from('secretarias').update(payload).eq('id', sec.id);
+          if (error) return this.showToast('Erro ao salvar secretaria', 'error');
+          await this.registrarLog('Atualizou', 'Secretarias', `Atualizou cadastro da secretaria ${sec.nome}`);
+          this.showToast('Alteração salva com sucesso');
+        },
+        showToast(message, type='success') {
+          this.toast = { show:true, message, type };
+          setTimeout(() => { this.toast.show = false; }, 2200);
+        },
+        async updateLai(req) {
+          if (!this.ensureSupabase()) return;
+          const payload = { ...req };
+          const { error } = await dbClient.from('lairequests').update(payload).eq('id', req.id);
+          if (error) return this.showToast('Erro ao salvar alteração LAI', 'error');
+          await this.registrarLog('Atualizou', 'LAI', `Mudou status de ${req.protocolo} para ${this.effectiveStatus(req)}`);
+          this.showToast('Alteração salva com sucesso');
+        },
+        async updateIn32(item) {
+          if (!this.ensureSupabase()) return;
+          const payload = { ...item };
+          const { error } = await dbClient.from('in32checklist').update(payload).eq('id', item.id);
+          if (error) return this.showToast('Erro ao salvar alteração IN32', 'error');
+          await this.registrarLog('Atualizou', 'IN32', `Mudou critério ${item.criterio} para ${item.status}`);
+          this.showToast('Alteração salva com sucesso');
+        },
+        async updatePntp(item) {
+          if (!this.ensureSupabase()) return;
+          const payload = { ...item };
+          const { error } = await dbClient.from('pntpchecklist').update(payload).eq('id', item.id);
+          if (error) return this.showToast('Erro ao salvar alteração PNTP', 'error');
+          await this.registrarLog('Atualizou', 'PNTP', `Atualizou ${item.criterio}`);
+          this.showToast('Alteração salva com sucesso');
+        },
+        async updateDecreto(item) {
+          if (!this.ensureSupabase()) return;
+          const payload = { ...item };
+          const { error } = await dbClient.from('decretotasks').update(payload).eq('id', item.id);
+          if (error) return this.showToast('Erro ao salvar alteração Decreto', 'error');
+          await this.registrarLog('Atualizou', 'Decreto', `Mudou status de ${item.obrigacao} para ${item.status}`);
+          this.showToast('Alteração salva com sucesso');
+        },
+        async updateSigilo(doc) {
+          if (!this.ensureSupabase()) return;
+          const payload = { ...doc };
+          delete payload.novoEvento;
+          delete payload.dataNovoEvento;
+          const { error } = await dbClient.from('sigilodocs').update(payload).eq('id', doc.id);
+          if (error) return this.showToast('Erro ao salvar alteração Sigilo', 'error');
+          await this.registrarLog('Atualizou', 'Sigilo', `Atualizou documento ${doc.titulo}`);
+          this.showToast('Alteração salva com sucesso');
+        },
+        exportarExcelIn32() {
+          const ws = XLSX.utils.json_to_sheet(this.in32Checklist.map(i => ({ criterio:i.criterio, subcriterio:i.subcriterio, secretaria:i.secretaria, status:i.status, responsavel:i.responsavel, ultimaChecagem:i.ultimaChecagem, evidencia:i.evidencia || '' })));
+          const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'IN32'); XLSX.writeFile(wb, 'in32_conformidade.xlsx');
+        },
+        exportarExcelPntp() {
+          const ws = XLSX.utils.json_to_sheet(this.pntpChecklist.map(i => ({ criterio:i.criterio, secretaria:i.secretaria, responsavel:i.responsavel, disponibilidade:i.disponibilidade, atualidade:i.atualidade, serieHistorica:i.serieHistorica, justificativa:i.justificativa, evidencia:i.evidencia || '' })));
+          const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'PNTP'); XLSX.writeFile(wb, 'pntp_conformidade.xlsx');
+        },
+        exportarExcelDecreto() {
+          const ws = XLSX.utils.json_to_sheet(this.decretoTasks.map(i => ({ obrigacao:i.obrigacao, subitem:i.subitem, secretaria:i.secretaria, status:i.status, prioridade:i.prioridade, prazo:i.prazo, evidencia:i.evidencia || '' })));
+          const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Decreto'); XLSX.writeFile(wb, 'decreto_conformidade.xlsx');
+        },
+        exportPntpPdf() {
+          const element = document.getElementById('pntp-report');
+          html2pdf().set({ margin:10, filename:`relatorio_pntp_${new Date().toISOString().slice(0,10)}.pdf`, image:{ type:'jpeg', quality:0.98 }, html2canvas:{ scale:2 }, jsPDF:{ unit:'mm', format:'a4', orientation:'portrait' } }).from(element).save();
+        },
+      },
+      async mounted() {
+        setInterval(() => { this.nowStamp = new Date().toLocaleString('pt-BR'); }, 30000);
+        if (!this.dbClient) return;
+        this.isLoading = true;
+        try {
+          const { data: sessionData } = await this.dbClient.auth.getSession();
+          if (sessionData && sessionData.session && sessionData.session.user) {
+            await this.syncSessionUser(sessionData.session.user);
+            await this.registrarLog('Acesso Automático', 'Sistema', 'Sessão recuperada via token');
+          }
+          const listener = this.dbClient.auth.onAuthStateChange(async (_event, session) => {
+            if (session && session.user) await this.syncSessionUser(session.user);
+            else this.sessionUser = null;
+          });
+          this.authSubscription = listener && listener.data && listener.data.subscription ? listener.data.subscription : null;
+          this.activityHandler = () => this.resetInactivityTimer();
+          ['click','keydown','mousemove','scroll','touchstart'].forEach(evt => window.addEventListener(evt, this.activityHandler));
+
+          await this.loadInitialTable('lairequests', (d) => { this.laiRequests = d; });
+          await this.loadInitialTable('in32checklist', (d) => { this.in32Checklist = d; });
+          await this.loadInitialTable('pntpchecklist', (d) => { this.pntpChecklist = d; });
+          await this.loadInitialTable('decretotasks', (d) => { this.decretoTasks = d; });
+          await this.loadInitialTable('sigilodocs', (d) => { this.sigiloDocs = d; });
+          await this.loadInitialTable('secretarias', (d) => { this.secretarias = d; });
+          await this.loadInitialTable('users', (d) => { if (d && d.length) this.users = d; }, 'id, nome, username, role, secretaria');
+          await this.loadInitialTable('audit_logs', (d) => { this.auditLogs = d; });
+          await this.loadInitialTable('legal_folders', (d) => { this.legalRepoFolders = d; });
+          await this.loadInitialTable('legal_files', (d) => { this.legalRepoFiles = d; });
+          this.setupRealtime();
+        } catch (e) {
+          console.error('Erro ao carregar dados iniciais do Supabase:', e);
+          this.showToast('Erro ao carregar dados iniciais do Supabase.', 'error');
+        } finally {
+          this.isLoading = false;
+        }
+      },
+      unmounted() {
+        if (this.authSubscription && this.authSubscription.unsubscribe) this.authSubscription.unsubscribe();
+        if (this.activityHandler) ['click','keydown','mousemove','scroll','touchstart'].forEach(evt => window.removeEventListener(evt, this.activityHandler));
+        if (this.idleTimeoutHandle) clearTimeout(this.idleTimeoutHandle);
+        if (this.idleWarningHandle) clearTimeout(this.idleWarningHandle);
+        if (this.idleIntervalHandle) clearInterval(this.idleIntervalHandle);
+        if (this.searchDebounceHandle) clearTimeout(this.searchDebounceHandle);
+      }
+    }).mount('#app');
+  </script>
+</body>
+</html>
